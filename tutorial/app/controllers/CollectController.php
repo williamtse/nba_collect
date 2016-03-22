@@ -52,9 +52,13 @@ class CollectController extends Controller {
      */
     public function gamesAction() {
         set_time_limit(0);
-        $next_month = date('Y-m', strtotime('+2 month'));
+        $next_month = date('Y-m', strtotime('+1 month'));
         $month = '1996-10';
-        $diff = $this->getMonthNum($next_month . '-01', $month . '-01');
+        if(!$this->request->getQuery('hole','string')){
+            $diff = 2;
+        }else{
+            $diff = $this->getMonthNum($next_month . '-01', $month . '-01');
+        }
         $url = 'http://china.nba.com/static/data/season/schedule_';
         $curl = new Core ();
         $curl->maxThread = $diff;
@@ -67,20 +71,21 @@ class CollectController extends Controller {
         $teamscores = [];
         while ($diff > 0) {
             $curl->add(array(
-                'url' => $url . str_replace('-', '_', $month) . '.json',
+                'url' => $url . str_replace('-', '_', $next_month) . '.json',
                 'args' => array(
-                    'db' => &$this->db,
+                    'url'=>$url . str_replace('-', '_', $next_month) . '.json',
                     'games' => &$games,
                     'teamscores' => &$teamscores,
                     'broadCasters' => &$broadCasters,
-                    'month' => $month
+                    'month' => $next_month
                 ),
                 'opt' => array(
                     CURLOPT_FOLLOWLOCATION => 1
                 ),
                     ), 'cbGames');
-            $month = date('Y-m', strtotime('+1 month', strtotime($month)));
-//            echo $month . " added ";
+            echo $next_month . " added\n";
+            
+            $next_month = date('Y-m', strtotime('-1 month', strtotime($next_month)));
             $diff--;
         }
         $curl->start();
@@ -123,6 +128,8 @@ function cbGames($r, $args) {
                 $games = $date['games'];
                 $gameCount = $date['gameCount'];
                 $utcMillis = $date['utcMillis'];
+//                mdum($args['url']);
+//                mdum($utcMillis);exit();
                 foreach ($games as $game) {
                     if (isset($game['profile']) && isset($game['boxscore'])&&!isset($args['games']['#'.substr($game['profile']['gameId'],2)])) {
                         
@@ -140,13 +147,18 @@ function cbGames($r, $args) {
                         }
                         $gameProfile['broadcastersId'] = $brcidstr;
                         $gameProfile['id'] = null;
+                        $gameProfile['utcMillis'] = $utcMillis;
                         $_games[] = $gameProfile;
                         $args['games']['#'.substr($game['profile']['gameId'],2)] = $gameProfile;
+                        
+                        //技术统计
+                        
                     }
                 }
             }
         }
     }
+    echo $args['month']," finished! ; http_code:{$r['info']['http_code']}\n";
 }
 
 function mdum($arr) {
