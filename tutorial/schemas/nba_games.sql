@@ -14,7 +14,7 @@ homeTeamId int(20),
 scheduleCode varchar(50),
 seasonType tinyint(1),
 `sequence` int(2),
-utcMillis varchar(13) comment '比赛时间，js时间戳',
+utcMillis bigint(13) comment '比赛时间，js时间戳',
 attendance varchar(20),
 awayScore int(3),
 gameLength varchar(30),
@@ -26,7 +26,8 @@ officialsDisplayName3 varchar(50),
 periodClock varchar(30),
 status tinyint(2),
 statusDesc varchar(40),
-ties tinyint(2)
+ties tinyint(2),
+season varchar(10) comment '赛季'
 )engine=InnoDb default charset=utf8;
 
 #球队比赛得分情况
@@ -35,6 +36,7 @@ create table nba_team_scores(
 gameId int(30) not null,
 teamId int(30),
 awayOrHome tinyint(1) comment '主客场 1:主场 2：客场',
+isWinner boolean,
 assists int(3) comment '助攻',
 biggestLead int(3),
 blocks int(3) comment '盖帽',
@@ -86,7 +88,10 @@ turnovers int(3) comment '失误'
 drop table if exists nba_player_scores;
 create table nba_player_scores(
 id int(255) not null primary key auto_increment,
-gameId int(30) not null,
+gameId varchar(30) not null,
+playerId int(30) not null,
+seasonType tinyint(1),
+gameStatus tinyint(1) comment '1-未开始，3-结束',
 assists int(3) comment '助攻',
 blocks int(3) comment '盖帽',
 defRebs int(3) comment '防守',
@@ -106,7 +111,12 @@ steals int(3) comment '抢断',
 tpa int(3) comment '三分出手',
 tpm int(3) comment '三分命中',
 tppct decimal(5,1) comment '三分百分比',
-turnovers int(3) comment '失误'
+turnovers int(3) comment '失误',
+dnpReason varchar(128) comment '未出场原因',
+isStarter varchar(4) comment '是否首发',
+onCourt varchar(4),
+plusMinus varchar(10),
+`position` varchar(20) comment '位置'
 )engine=InnoDb default charset=utf8;
 
 drop table if exists nba_broadcasters;

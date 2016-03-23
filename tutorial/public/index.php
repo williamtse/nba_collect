@@ -30,7 +30,7 @@ try {
             "host"     => "localhost",
             "username" => "root",
             "password" => "",
-            "dbname"   => "tutorial",
+            "dbname"   => "nba",
             "charset"  => "utf8"
         ));
     };

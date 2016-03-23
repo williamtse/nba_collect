@@ -54,9 +54,9 @@ class CollectController extends Controller {
         set_time_limit(0);
         $next_month = date('Y-m', strtotime('+1 month'));
         $month = '1996-10';
-        if(!$this->request->getQuery('hole','string')){
+        if (!$this->request->getQuery('hole', 'string')) {
             $diff = 2;
-        }else{
+        } else {
             $diff = $this->getMonthNum($next_month . '-01', $month . '-01');
         }
         $url = 'http://china.nba.com/static/data/season/schedule_';
@@ -73,7 +73,7 @@ class CollectController extends Controller {
             $curl->add(array(
                 'url' => $url . str_replace('-', '_', $next_month) . '.json',
                 'args' => array(
-                    'url'=>$url . str_replace('-', '_', $next_month) . '.json',
+                    'url' => $url . str_replace('-', '_', $next_month) . '.json',
                     'games' => &$games,
                     'teamscores' => &$teamscores,
                     'broadCasters' => &$broadCasters,
@@ -83,15 +83,86 @@ class CollectController extends Controller {
                     CURLOPT_FOLLOWLOCATION => 1
                 ),
                     ), 'cbGames');
-            echo $next_month . " added\n";
-            
+            obOutput($next_month . " added!");
             $next_month = date('Y-m', strtotime('-1 month', strtotime($next_month)));
             $diff--;
         }
         $curl->start();
-        $sql1=MultiCreateSql('nba_games', $games);
+        $sql1 = MultiCreateSql('nba_games', $games);
         $this->db->query($sql1);
         $this->db->commit();
+    }
+    /**
+     * 最新的30只球队信息采集
+     */
+    public function teamsAction(){
+        $url = 'http://china.nba.com/static/data/season/conferencestanding.json';
+        $curl = new Core ();
+        $curl->maxThread = 1;
+        $curl->taskPoolType = 'queue';
+        $teams = [];
+        $standings = [];
+        $curl->add(array(
+            'url'=>$url,
+            'args'=>array(
+                'teams'=>&$teams,
+                'standings'=>&$standings
+            ),
+        ),'cbTeams');
+        $curl->start();
+        $this->db->query('truncate nba_season_teams;');
+        //储存球队
+        $this->db->query(MultiCreateSql('nba_season_teams', $teams));
+        //储存球队当前的得分
+        $this->db->query('truncate nba_season_teams_standings;');
+        $this->db->query(MultiCreateSql('nba_season_teams_standings', $standings));
+    }
+    //采集某个赛季球队和球员每场比赛的得分
+    public function tongjiAction() {
+        set_time_limit(0);
+        ini_set("memory_limit","-1");
+        $season = $this->request->getQuery('season','string');
+        if(!$season) die('缺少赛季');
+        $games = $this->db->query('select * from nba_games where utcMillis>='.strtotime(substr($season,0,4).'-10-01').'000;')->fetchAll();
+        if (!empty($games)) {
+            $url = 'http://china.nba.com/static/data/game/snapshot_';
+            $curl = new Core ();
+            $curl->maxThread = count($games);
+            $curl->taskPoolType = 'queue';
+            $teamTjs = [];
+            $playerTjs = [];
+            foreach ($games as $game) {
+                obOutput(date('Y-m-d H:i:s',substr($game['utcMillis'],0,10)));
+                $gameId = $game['gameId'];
+                $curl->add(
+                        array(
+                    'url' => $url . $gameId . '.json',
+                    'args' => array(
+                        'teamTjs' => &$teamTjs,
+                        'playerTjs' => &$playerTjs,
+                        'url' => $url . $gameId . '.json',
+                        'game'=>$game,
+                    ),
+                    'opt' => array(
+                        CURLOPT_FOLLOWLOCATION => 1
+                    ),
+                        ), 'cbTongji'
+                );
+                obOutput($url . $gameId . ' added!');
+            }
+            $curl->start();
+            $this->db->query('truncate nba_team_scores;');
+            obOutput('truncate nba_team_scores');
+            $sql1 = MultiCreateSql('nba_team_scores', $teamTjs);
+            obOutput('insert datas to nba_team_scores done!');
+            $this->db->query($sql1);
+            obOutput('truncate nba_player_scores');
+            $this->db->query('truncate nba_player_scores;');
+            $sql2 = MultiCreateSql('nba_player_scores', $playerTjs);
+            $this->db->query($sql2);
+            obOutput('insert datas to nba_player_scores done!');
+            
+        }
     }
 
     private function getMonthNum($date1, $date2, $tags = '-') {
@@ -101,38 +172,110 @@ class CollectController extends Controller {
     }
 
 }
+function cbTeams($r,$args){
+    if ($r['info']['http_code'] == 200) {
+        $content = json_decode($r['content'], true);
+        $standingGroups = $content['payload']['standingGroups'];
+        foreach ($standingGroups as $group){
+            foreach($group['teams'] as $key=>$team){
+                $profile = $team['profile'];
+                $args['teams'][] = $profile;
+                $standing = $team['standings'];
+                $standing['teamId'] = $team['profile']['id'];
+                $standing['ranking'] = $key+1;//排名
+                $args['standings'][] = $standing;
+            }
+        }
+    }
+    echo 'success<br>';
+    obOutput();
+}
+function cbTongji($r, $args) {
+    if ($r['info']['http_code'] == 200) {
+        $content = json_decode($r['content'], true);
+        $awayTeam = $content['payload']['awayTeam'];
+        $homeTeam = $content['payload']['homeTeam'];
+        $game = $args['game'];
+        $gameId = $game['gameId'];
+        //awayTeam tongji
+        $awayTeamId = $awayTeam['profile']['id'];
+        $awayTeamScore = $awayTeam['score'];
+        $awayTeamScore['teamId'] = $awayTeamId;
+        $awayTeamScore['gameId'] = $gameId;
+        $awayTeamScore['awayOrHome'] = 2;
+        $awayTeamScore['isWinner'] = $game['awayScore']>$game['homeScore']?1:0;
+        $args['teamTjs'][] = $awayTeamScore;
+        //away team players score
+        if(!empty($awayTeam['gamePlayers'])){
+            foreach ($awayTeam['gamePlayers'] as $player) {
+                $awayPlayerScore = array_merge($player['statTotal'],$player['boxscore']);
+                $awayPlayerScore['gameId'] = $gameId;
+                $awayPlayerScore['playerId'] = $player['profile']['playerId'];
+                $awayPlayerScore['seasonType'] = $game['seasonType'];
+                $awayPlayerScore['gameStatus'] = $game['status'];
+                $args['playerTjs'][] = $awayPlayerScore;
+            }
+        }
+        
+        //homeTeam tongji
+        $homeTeamId = $homeTeam['profile']['id'];
+        $homeTeamScore = $homeTeam['score'];
+        $homeTeamScore['teamId'] = $homeTeamId;
+        $homeTeamScore['gameId'] = $gameId;
+        $homeTeamScore['homeOrHome'] = 1;
+        $homeTeamScore['isWinner'] = $game['homeScore']>$game['awayScore']?1:0;
+        $args['teamTjs'][] = $homeTeamScore;
+        //away team players score
+        if(!empty($homeTeam['gamePlayers'])){
+            foreach ($homeTeam['gamePlayers'] as $player) {
+                $homePlayerScore = array_merge($player['statTotal'],$player['boxscore']);
+                $homePlayerScore['gameId'] = $gameId;
+                $homePlayerScore['playerId'] = $player['profile']['playerId'];
+                $homePlayerScore['seasonType'] = $game['seasonType'];
+                $homePlayerScore['gameStatus'] = $game['status'];
+                $args['playerTjs'][] = $homePlayerScore;
+            }
+        }
+    }
+    obOutput($args['url'] . ' finished!');
+}
 
 function MultiCreateSql($tb, $arr) {
     $keys = '';
     $hasSetKeys = false;
-    $inserts=[];
+    $inserts = [];
     foreach ($arr as $a) {
-        if(!$hasSetKeys){
+        if (!$hasSetKeys) {
             $keys = getKeys($a);
             $hasSetKeys = true;
         }
         $inserts[] = getValues($a);
     }
-    $sql = 'insert into ' . $tb . $keys . 'values' . implode(',',$inserts);
+    $sql = 'insert into ' . $tb . $keys . 'values' . implode(',', $inserts);
     return $sql;
 }
-
+function obOutput($str=''){
+    echo $str.'<br>';
+    echo '<script>window.scrollTo(0,document.body.scrollHeight);</script>';
+    ob_flush();
+    flush();
+}
 function cbGames($r, $args) {
     if ($r['info']['http_code'] == 200) {
         $content = json_decode($r['content'], true);
         $dates = $content['payload']['dates'];
+        $season = $content['payload']['season'];
         $_games = [];
         $broadCasters = $args['broadCasters'];
         if (!empty($dates)) {
             foreach ($dates as $date) {
                 $games = $date['games'];
                 $gameCount = $date['gameCount'];
-                $utcMillis = $date['utcMillis'];
 //                mdum($args['url']);
 //                mdum($utcMillis);exit();
                 foreach ($games as $game) {
-                    if (isset($game['profile']) && isset($game['boxscore'])&&!isset($args['games']['#'.substr($game['profile']['gameId'],2)])) {
-                        
+                    if (isset($game['profile']) && isset($game['boxscore']) && !isset($args['games']['#' . substr($game['profile']['gameId'], 2)])) {
+
                         $gameProfile = array_merge($game['profile'], $game['boxscore']);
                         $brcidstr = NULL;
                         if (!empty($game['broadcasters'])) {
@@ -147,18 +290,17 @@ function cbGames($r, $args) {
                         }
                         $gameProfile['broadcastersId'] = $brcidstr;
                         $gameProfile['id'] = null;
-                        $gameProfile['utcMillis'] = $utcMillis;
+                        $gameProfile['season'] = $season['scheduleYearDisplay'];
                         $_games[] = $gameProfile;
-                        $args['games']['#'.substr($game['profile']['gameId'],2)] = $gameProfile;
-                        
+                        $args['games']['#' . substr($game['profile']['gameId'], 2)] = $gameProfile;
+
                         //技术统计
-                        
                     }
                 }
             }
         }
     }
-    echo $args['month']," finished! ; http_code:{$r['info']['http_code']}\n";
+    obOutput($args['month'], " finished! ; http_code:{$r['info']['http_code']}");
 }
 
 function mdum($arr) {
